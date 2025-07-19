@@ -1,3 +1,4 @@
+#定义了训练所使用的GPU的相关配置
 device_ids: 0 # determine GPU ids in bus order
 n_gpu: 1 # select the number of gpus to use
 seed: 2147483647 # random seed for numpy, torch and cuda

@@ -1,4 +1,5 @@
 # optimizer info
+#定义了训练所使用的优化器的相关配置。
 optimizer:
   name: Adam
   kwargs:

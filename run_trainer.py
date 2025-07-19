@@ -15,8 +15,8 @@ def main(rank, config):
 
 
 if __name__ == "__main__":
-    config = Config("./reproduce/Baseline/Baseline-miniImageNet--ravi-Conv64F-5-Reproduce.yaml").get_config_dict()
-
+    config = Config("./config/fsl-quickboost.yaml").get_config_dict()
+    #是否用多GPU训练
     if config["n_gpu"] > 1:
         os.environ["CUDA_VISIBLE_DEVICES"] = config["device_ids"]
         torch.multiprocessing.spawn(main, nprocs=config["n_gpu"], args=(config,))

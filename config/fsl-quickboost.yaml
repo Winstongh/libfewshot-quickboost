@@ -1,0 +1,17 @@
+includes:
+  - headers/data.yaml
+  - headers/device.yaml
+  - headers/misc.yaml
+  - headers/model.yaml
+  - headers/optimizer.yaml
+  - classifiers/FSL-QuickBoost.yaml
+  - backbones/cnnencoder.yaml
+
+classifier:
+  name: QuickBoost
+  kwargs:
+
+backbone:
+  name: CNNEncoder
+  kwargs:
+ 

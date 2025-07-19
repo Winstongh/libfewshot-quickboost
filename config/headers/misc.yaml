@@ -1,4 +1,5 @@
 # log settings
+#定义了训练过程中一些杂项设置
 log_name: ~ # if not ~: use for log file's name
 log_level: info
 log_interval: 100

@@ -10,6 +10,7 @@ resume: False
 way_num: 5
 shot_num: 1
 query_num: 15
+
 test_way: ~ # use ~ -> test_* = *_num
 test_shot: ~
 test_query: ~
