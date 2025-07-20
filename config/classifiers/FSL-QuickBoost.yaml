@@ -1,3 +1,5 @@
 classifier:
   name: quickboost
   kwargs:
+    inputsize: 64
+    hidden_size: 8

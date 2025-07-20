@@ -43,6 +43,7 @@ class Trainer(object):
         self.rank = rank # 保存进程编号（用于多进程通信和设备绑定）
         self.config = config
         self.config["rank"] = rank # 将进程编号写入配置，方便后续组件（如模型、数据加载器）使用
+
         self.distribute = self.config["n_gpu"] > 1  # 判断是否启用分布式训练（多GPU场景，n_gpu>1时为True）
         (
             self.result_path, # 保存最终训练结果（如指标报告）的路径
@@ -50,21 +51,28 @@ class Trainer(object):
             self.checkpoints_path, # 保存模型权重 checkpoint 的路径
             self.viz_path,    # 保存可视化文件（如TensorBoard日志）的路径
         ) = self._init_files(config)
+
         self.logger = self._init_logger() # 初始化日志器（用于记录训练过程，输出到控制台和日志文件）
+
          # 初始化计算设备（GPU/CPU）及可用设备ID列表
          # device: 当前进程绑定的设备（如cuda:0）
          # list_ids: 所有可用GPU的编号列表（如[0,1]）
         self.device, self.list_ids = self._init_device(rank, config)
         self.writer = self._init_writer(self.viz_path) # 初始化可视化工具（如TensorBoard的SummaryWriter
+
         # 初始化指标计数器（用于统计训练、验证、测试阶段的损失、准确率等）
         self.train_meter, self.val_meter, self.test_meter = self._init_meter() 
+
         print(self.config)  # 打印配置字典（调试用，确认参数是否正确加载）
+
         self.model, self.model_type = self._init_model(config)
+
         (
             self.train_loader,
             self.val_loader,
             self.test_loader,
         ) = self._init_dataloader(config)
+
         (
             self.optimizer,
             self.scheduler,
@@ -72,6 +80,7 @@ class Trainer(object):
             self.best_val_acc,
             self.best_test_acc,
         ) = self._init_optim(config)
+
         self.val_per_epoch = config["val_per_epoch"]
 
     def train_loop(self, rank):
@@ -403,6 +412,7 @@ class Trainer(object):
 
     def _init_model(self, config):
         """
+        从配置中初始化模型（骨干+分类器），并加载预训练的参数或从检查点恢复，然后在必要时并行。
         Init model(backbone+classifier) from the config dict and load the pretrained params or resume from a
         checkpoint, then parallel if necessary .
 
@@ -412,7 +422,7 @@ class Trainer(object):
         Returns:
             tuple: A tuple of the model and model's type.
         """
-        emb_func = get_instance(arch, "backbone", config)
+        emb_func = get_instance(arch, "backbone", config) # 返回CNNEncoder
         model_kwargs = {
             "way_num": config["way_num"],
             "shot_num": config["shot_num"] * config["augment_times"],
