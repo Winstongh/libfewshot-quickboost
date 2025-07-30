@@ -1,5 +1,5 @@
 #定义了训练所使用的数据的相关配置。
-data_root: /data1/home/cw/lab/miniImageNet--ravi
+data_root: /data1/home/cw/lab/data/miniImageNet--ravi
 image_size: 84
 use_memory: False
 augment: True

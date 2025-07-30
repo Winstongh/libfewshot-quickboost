@@ -12,9 +12,10 @@ classifier:
   kwargs:
     inputsize: 64
     hidden_size: 8
+    relation_num: 8
 
 
 backbone:
   name: CNNEncoder
   kwargs:
- # 不需要参数
+    feature_dim: 64

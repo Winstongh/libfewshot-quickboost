@@ -1,4 +1,5 @@
 backbone:
   name: CNNEncoder
   kwargs:
+    feature_dim: 64
    

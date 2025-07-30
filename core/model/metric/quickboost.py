@@ -1,98 +1,149 @@
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from .metric_model import MetricModel
+from torch import nn
+from torch.nn import functional as F
+import numpy as np
 
-class QuickBoostLayer(nn.Module):
-    """核心特征交互层，整合RelationNet和局部特征匹配"""
-    def __init__(self, input_size, hidden_size, n_k=3):
-        super(QuickBoostLayer, self).__init__()
-        self.n_k = n_k
-        # RelationNet组件
-        self.relation_net = nn.Sequential(
-            nn.Conv2d(128, 64, kernel_size=3, padding=0),
-            nn.BatchNorm2d(64, momentum=1, affine=True),
-            nn.ReLU(),
+# 从正确的位置导入
+from core.utils import accuracy
+from .metric_model import MetricModel  # 相对导入
+
+
+class RelationNetwork(nn.Module):
+    """Relation Network module"""
+    def __init__(self, input_channels=128, hidden_dim=8):
+        super(RelationNetwork, self).__init__()
+        
+        self.layers = nn.Sequential(
+            nn.Conv2d(input_channels, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
-            nn.Conv2d(64, 64, kernel_size=3, padding=0),
-            nn.BatchNorm2d(64, momentum=1, affine=True),
-            nn.ReLU(),
+            
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
-            nn.Flatten(),
-            nn.Linear(input_size*3*3, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, 1),
-            nn.Sigmoid()
         )
-
-    def forward(self, query_feat, support_feat, way_num, shot_num, query_num):
-        """
-        Args:
-            query_feat: [episode, way*query, c, h, w]
-            support_feat: [episode, way*shot, c, h, w]
-        Returns:
-            combined_score: [episode*way*query, way]
-        """
-        # 1. RelationNet分支
-        relation_pairs = torch.cat([
-            support_feat.unsqueeze(1).expand(-1, way_num*query_num, -1, -1, -1),
-            query_feat.unsqueeze(2).expand(-1, -1, way_num*shot_num, -1, -1)
-        ], dim=3)  # [ep, q, s, 2c, h, w]
-        rn_scores = self.relation_net(
-            relation_pairs.flatten(0, 2).permute(0, 3, 1, 2)  # [ep*q*s, 2c, h, w]
-        ).view(-1, way_num*query_num, way_num*shot_num).mean(dim=2)  # [ep, q, way]
-
-        # 2. 局部特征匹配分支（类似DN4的top-k匹配）
-        query_feat = F.normalize(query_feat.flatten(3), p=2, dim=-1)  # [ep, q, c, hw]
-        support_feat = F.normalize(
-            support_feat.view(-1, way_num, shot_num, *support_feat.shape[-3:]).flatten(3),
-            p=2, dim=-1
-        )  # [ep, way, s, c, hw]
         
-        sim_matrix = torch.einsum('eqcf,ewscf->eqws', query_feat, support_feat)  # [ep, q, way, s, hw]
-        topk_sim = torch.topk(sim_matrix, self.n_k, dim=-1).values  # [ep, q, way, s, k]
-        local_scores = topk_sim.mean(dim=[-1, -2])  # [ep, q, way]
+        # Calculate the flattened feature size: 64 * 4 * 4 = 1024
+        self.fc1 = nn.Linear(1024, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, 1)
 
-        # 3. 动态加权融合
-        alpha = torch.sigmoid(self.alpha_predictor(
-            torch.cat([query_feat.mean((2,3)), support_feat.mean((2,3,4))], dim=-1)
-        ))  # [ep, 1]
-        combined_score = alpha * rn_scores + (1-alpha) * local_scores
-        
-        return combined_score.view(-1, way_num)
+    def forward(self, x):
+        out = self.layers(x)
+        out = out.view(out.size(0), -1)
+        out = F.relu(self.fc1(out))
+        out = torch.sigmoid(self.fc2(out))
+        return out
+
 
 class QuickBoost(MetricModel):
-    def __init__(self, n_k=3, **kwargs):
+    def __init__(self, inputsize=64, hidden_size=8, relation_dim=8, **kwargs):
         super(QuickBoost, self).__init__(**kwargs)
-        self.boost_layer = QuickBoostLayer(
-            input_size=kwargs.get('inputsize', 64),
-            hidden_size=kwargs.get('hidden_size', 8),
-            n_k=n_k
-        )
-        self.loss_func = nn.CrossEntropyLoss()
+        
+        self.inputsize = inputsize
+        self.hidden_size = hidden_size
+        self.relation_dim = relation_dim
+        
+        # Relation Network
+        self.relation_net = RelationNetwork(inputsize * 2, relation_dim)
+        
+        # Loss function
+        self.loss_func = nn.MSELoss()
 
     def set_forward(self, batch):
-        image, _ = batch
+        """
+        Forward pass for evaluation/testing
+        """
+        image, global_target = batch
         image = image.to(self.device)
+        
+        # Extract features
         feat = self.emb_func(image)
         
-        # 按episode切分特征
-        support_feat, query_feat, _, query_target = self.split_by_episode(
-            feat, mode=2
+        # Split features into support and query sets
+        support_feat, query_feat, support_target, query_target = self.split_by_episode(
+            feat, mode=3  # 4D input returning 4D output
         )
         
-        # 计算综合得分
-        output = self.boost_layer(
-            query_feat, 
-            support_feat,
-            self.way_num,
-            self.shot_num,
-            self.query_num
-        )
-        acc = accuracy(output, query_target.view(-1))
-        return output, acc
+        # Calculate relations
+        relations = self._calculate_relations(support_feat, query_feat)
+        
+        # Calculate accuracy
+        acc = accuracy(relations, query_target.reshape(-1))
+        
+        return relations, acc
 
     def set_forward_loss(self, batch):
-        output, acc = self.set_forward(batch)
-        loss = self.loss_func(output, batch[-1].view(-1).to(self.device))
-        return output, acc, loss
+        """
+        Forward pass for training with loss calculation
+        """
+        image, global_target = batch
+        image = image.to(self.device)
+        
+        # Extract features
+        feat = self.emb_func(image)
+        
+        # Split features into support and query sets
+        support_feat, query_feat, support_target, query_target = self.split_by_episode(
+            feat, mode=3  # 4D input returning 4D output
+        )
+        
+        # Calculate relations
+        relations = self._calculate_relations(support_feat, query_feat)
+        
+        # Construct one-hot labels
+        one_hot_labels = self._construct_one_hot(query_target.reshape(-1))
+        
+        # Calculate loss
+        loss = self.loss_func(relations, one_hot_labels)
+        
+        # Calculate accuracy
+        acc = accuracy(relations, query_target.reshape(-1))
+        
+        return relations, acc, loss
+
+    def _calculate_relations(self, support_features, query_features):
+        """
+        Calculate relations between support and query features
+        """
+        # Get dimensions
+        way_num = self.way_num
+        shot_num = self.shot_num
+        query_num = self.query_num
+        
+        # Reshape support features: average over shots
+        support_features = support_features.view(way_num, shot_num, 
+                                               support_features.size(1),
+                                               support_features.size(2),
+                                               support_features.size(3))
+        support_features = torch.mean(support_features, dim=1)  # [way_num, c, h, w]
+        
+        # Reshape query features
+        query_features = query_features.view(way_num * query_num,
+                                           query_features.size(1),
+                                           query_features.size(2),
+                                           query_features.size(3))
+        
+        # Expand features for relation calculation
+        support_features_ext = support_features.unsqueeze(0).repeat(way_num * query_num, 1, 1, 1, 1)
+        query_features_ext = query_features.unsqueeze(1).repeat(1, way_num, 1, 1, 1)
+        
+        # Concatenate features
+        relation_pairs = torch.cat((support_features_ext, query_features_ext), 2)
+        relation_pairs = relation_pairs.view(-1, self.inputsize * 2,
+                                           relation_pairs.size(3),
+                                           relation_pairs.size(4))
+        
+        # Pass through relation network
+        relations = self.relation_net(relation_pairs)
+        relations = relations.view(way_num * query_num, way_num)
+        
+        return torch.sigmoid(relations)
+
+    def _construct_one_hot(self, labels):
+        """Construct one-hot labels"""
+        way_num = self.way_num
+        one_hot = torch.zeros(labels.size(0), way_num).to(labels.device)
+        one_hot.scatter_(1, labels.long().view(-1, 1), 1)
+        return one_hot
